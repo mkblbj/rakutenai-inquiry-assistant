@@ -70,14 +70,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       setLanguage: (language) => set({ language }),
       setTheme: (theme) => set({ theme }),
-      setProvider: (provider) => {
-        const urls: Record<Provider, string> = {
-          openai: 'https://api.openai.com/v1',
-          gemini: 'https://generativelanguage.googleapis.com/v1beta',
-          custom: '',
-        }
-        set({ provider, apiUrl: urls[provider] })
-      },
+      setProvider: (provider) => set({ provider }),
       setApiConfig: (config) => set((state) => ({ ...state, ...config })),
       setDialogSettings: (settings) => set((state) => ({ ...state, ...settings })),
       setSystemPrompt: (systemPrompt) => set({ systemPrompt }),

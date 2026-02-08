@@ -48,4 +48,15 @@ export const en: Record<TranslationKey, string> = {
   streamOutput: 'Streaming',
   systemPromptLabel: 'System Prompt',
   resetDefaults: 'Reset Defaults',
+
+  exportSettings: 'Export Settings',
+  importSettings: 'Import Settings',
+  exportToClipboard: 'Copy to Clipboard',
+  exportToFile: 'Save as File',
+  importFromClipboard: 'Import from Clipboard',
+  importFromFile: 'Import from File',
+  exportSuccess: 'Settings exported',
+  importSuccess: 'Settings imported',
+  importFailed: 'Import failed: invalid format',
+  importConfirm: 'Import will overwrite current settings. Continue?',
 }

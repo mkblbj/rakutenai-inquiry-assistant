@@ -59,6 +59,18 @@ export const zh = {
   streamOutput: '流式输出',
   systemPromptLabel: '系统提示词',
   resetDefaults: '恢复默认',
+
+  // 导入导出
+  exportSettings: '导出配置',
+  importSettings: '导入配置',
+  exportToClipboard: '复制到剪贴板',
+  exportToFile: '保存为文件',
+  importFromClipboard: '从剪贴板导入',
+  importFromFile: '从文件导入',
+  exportSuccess: '配置已导出',
+  importSuccess: '配置已导入',
+  importFailed: '导入失败：格式无效',
+  importConfirm: '导入将覆盖当前配置，确定继续？',
 } as const
 
 export type TranslationKey = keyof typeof zh

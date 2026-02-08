@@ -57,6 +57,18 @@ export interface TestConnectionMessage {
 
 export type TestConnectionResponse = { ok: boolean; error?: string }
 
+/** 获取可用模型列表 */
+export interface FetchModelsMessage {
+  type: 'FETCH_MODELS'
+  payload?: { apiUrl?: string; apiKey?: string }
+}
+
+export type FetchModelsResponse = {
+  ok: boolean
+  models?: Array<{ id: string; name: string }>
+  error?: string
+}
+
 // ========== 流式 AI 对话 (Port 长连接) ==========
 
 /** Side Panel → Background: 开始流式对话 */
@@ -93,6 +105,7 @@ export type RuntimeMessage =
   | RequestExtractMessage
   | FillReplyMessage
   | TestConnectionMessage
+  | FetchModelsMessage
 
 export type PortMessage =
   | StartStreamMessage

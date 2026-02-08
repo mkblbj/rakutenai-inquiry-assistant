@@ -90,12 +90,106 @@ export default defineBackground(() => {
       }
 
       case 'TEST_CONNECTION': {
-        // Phase 5 实现 AI Provider 连接测试
-        sendResponse({ ok: false, error: 'Not implemented yet' })
-        break
+        ;(async () => {
+          try {
+            const settings = await getSettings()
+            const apiUrl = msg.payload?.apiUrl || settings.apiUrl || 'https://api.openai.com/v1'
+            const apiKey = msg.payload?.apiKey || settings.apiKey || ''
+            const model = msg.payload?.model || settings.model || 'gpt-4o-mini'
+
+            if (!apiKey) {
+              sendResponse({ ok: false, error: 'API Key 未配置' })
+              return
+            }
+
+            // 用一个最小的 chat completion 请求测试连通性
+            const res = await fetch(normalizeBaseUrl(apiUrl) + '/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`,
+              },
+              body: JSON.stringify({
+                model,
+                messages: [{ role: 'user', content: 'Hi' }],
+                max_tokens: 1,
+              }),
+            })
+
+            if (res.ok) {
+              sendResponse({ ok: true })
+            } else {
+              const body = await res.text()
+              let errorMsg = `HTTP ${res.status}`
+              try {
+                const json = JSON.parse(body)
+                errorMsg = json.error?.message || json.message || errorMsg
+              } catch { /* ignore */ }
+              sendResponse({ ok: false, error: errorMsg })
+            }
+          } catch (e: any) {
+            sendResponse({ ok: false, error: e?.message || 'Network error' })
+          }
+        })()
+        return true // 异步
+      }
+
+      case 'FETCH_MODELS': {
+        ;(async () => {
+          try {
+            const settings = await getSettings()
+            const apiUrl = msg.payload?.apiUrl || settings.apiUrl || 'https://api.openai.com/v1'
+            const apiKey = msg.payload?.apiKey || settings.apiKey || ''
+
+            if (!apiKey) {
+              sendResponse({ ok: false, error: 'API Key 未配置' })
+              return
+            }
+
+            const res = await fetch(normalizeBaseUrl(apiUrl) + '/models', {
+              headers: { Authorization: `Bearer ${apiKey}` },
+            })
+
+            if (!res.ok) {
+              sendResponse({ ok: false, error: `HTTP ${res.status}` })
+              return
+            }
+
+            const json = await res.json()
+            const models = (json.data || json || [])
+              .filter((m: any) => m.id)
+              .map((m: any) => ({ id: m.id, name: m.id }))
+              .sort((a: any, b: any) => a.id.localeCompare(b.id))
+
+            sendResponse({ ok: true, models })
+          } catch (e: any) {
+            sendResponse({ ok: false, error: e?.message || 'Network error' })
+          }
+        })()
+        return true // 异步
       }
     }
   })
+
+  // ===== 辅助函数 =====
+
+  /** 从 chrome.storage 读取设置 */
+  async function getSettings() {
+    const result = await chrome.storage.local.get('inquiry-ai-settings')
+    const raw = result['inquiry-ai-settings']
+    if (!raw) return {} as Record<string, any>
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+      return parsed?.state ?? {}
+    } catch {
+      return {}
+    }
+  }
+
+  /** 标准化 base URL: 去除尾部斜杠 */
+  function normalizeBaseUrl(url: string): string {
+    return url.replace(/\/+$/, '')
+  }
 
   // ===== 点击扩展图标打开 Side Panel =====
   chrome.action.onClicked.addListener((tab) => {

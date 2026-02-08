@@ -48,4 +48,15 @@ export const ja: Record<TranslationKey, string> = {
   streamOutput: 'ストリーミング出力',
   systemPromptLabel: 'システムプロンプト',
   resetDefaults: 'デフォルトに戻す',
+
+  exportSettings: '設定をエクスポート',
+  importSettings: '設定をインポート',
+  exportToClipboard: 'クリップボードにコピー',
+  exportToFile: 'ファイルに保存',
+  importFromClipboard: 'クリップボードから読み込む',
+  importFromFile: 'ファイルから読み込む',
+  exportSuccess: '設定をエクスポートしました',
+  importSuccess: '設定をインポートしました',
+  importFailed: 'インポート失敗：無効な形式',
+  importConfirm: 'インポートすると現在の設定が上書きされます。続行しますか？',
 }
