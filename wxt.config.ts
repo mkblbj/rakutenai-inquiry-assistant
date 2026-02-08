@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   srcDir: 'src',
   modules: ['@wxt-dev/module-react'],
+  // headless Linux 环境：禁用自动启动浏览器，手动加载 .output/chrome-mv3-dev/
+  webExt: {
+    disabled: true,
+  },
   vite: () => ({
     plugins: [tailwindcss()],
   }),
