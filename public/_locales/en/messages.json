@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "AI Customer Support",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "AI assistant for e-commerce customer inquiry management",
+    "description": "Extension description"
+  }
+}

@@ -1,0 +1,7 @@
+/* Tailwind v4 CSS-first 配置 */
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #2478AE;
+  --color-primary-hover: #1a5f8f;
+}

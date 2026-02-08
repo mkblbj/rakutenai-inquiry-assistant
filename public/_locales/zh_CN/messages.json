@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "AI 客服助手",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "电商客服问询 AI 助手，支持多平台",
+    "description": "Extension description"
+  }
+}

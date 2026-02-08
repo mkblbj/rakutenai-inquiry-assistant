@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "AI カスタマーサポート",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "ECサイトのお問い合わせ対応を支援するAIアシスタント",
+    "description": "Extension description"
+  }
+}
