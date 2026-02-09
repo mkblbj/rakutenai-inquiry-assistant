@@ -1,16 +1,18 @@
+import { useState } from 'react'
 import { Avatar, Button, message } from 'antd'
 import { Bubble, Sender } from '@ant-design/x'
 import { RobotOutlined, UserOutlined, CopyOutlined, FormOutlined } from '@ant-design/icons'
 import { XMarkdown } from '@ant-design/x-markdown'
+import type { MessageInfo } from '@ant-design/x-sdk/es/x-chat'
+import type { XModelMessage } from '@ant-design/x-sdk/es/chat-providers/types/model'
 import { useI18n } from '@/utils/i18n'
 import { QuickPrompts } from './QuickPrompts'
 import { ContextCard } from './ContextCard'
-import type { Message } from '@/types/message'
 import type { InquiryData } from '@/types/inquiry'
 import type { TranslationKey } from '@/locales/zh'
 
 interface ChatPanelProps {
-  messages: Message[]
+  messages: MessageInfo<XModelMessage>[]
   loading: boolean
   inquiry: InquiryData | null
   onSend: (content: string) => void
@@ -18,32 +20,50 @@ interface ChatPanelProps {
   onFillReply: (content: string) => void
 }
 
-type BubbleStatus = 'loading' | 'success' | 'error' | 'local' | 'updating' | 'abort'
-
 export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillReply }: ChatPanelProps) {
   const { t } = useI18n()
+  const [inputValue, setInputValue] = useState('')
 
-  // 把 Message[] 转为 Bubble.List 的 items
+  // 提交后清空输入框
+  const handleSubmit = (text: string) => {
+    if (!text.trim()) return
+    onSend(text)
+    setInputValue('')
+  }
+
+  // MessageInfo<XModelMessage> → Bubble.List items
   const bubbleItems = messages
-    .filter((msg) => msg.role !== 'system')
-    .map((msg) => ({
-      key: msg.id,
-      role: msg.role as string,
-      content: msg.content,
-      status: mapStatus(msg.status),
-      extraInfo: { originalMsg: msg },
-    }))
+    .filter((m) => m.message.role !== 'system')
+    .map((m) => {
+      const content = typeof m.message.content === 'string' ? m.message.content : ''
+      const isStreaming = m.status === 'loading' || m.status === 'updating'
+      const isAssistant = m.message.role === 'assistant'
 
-  const assistantFooter = (_content: any, info: { extraInfo?: { originalMsg?: Message } }) => {
-    const msg = info.extraInfo?.originalMsg
-    if (!msg || msg.status === 'streaming') return null
+      return {
+        key: m.id,
+        role: m.message.role as string,
+        content,
+        status: m.status as 'loading' | 'success' | 'error' | 'local' | 'updating' | 'abort',
+        // 关键：content 为空 + loading 状态 → Bubble 显示原生三点 loading
+        loading: isAssistant && isStreaming && !content,
+        // 有内容在流式时启用 streaming
+        streaming: isAssistant && isStreaming && !!content,
+        extraInfo: { msgInfo: m },
+      }
+    })
+
+  const assistantFooter = (_content: any, info: { extraInfo?: { msgInfo?: MessageInfo<XModelMessage> } }) => {
+    const m = info.extraInfo?.msgInfo
+    if (!m || m.status === 'loading' || m.status === 'updating') return null
+    const content = typeof m.message.content === 'string' ? m.message.content : ''
+    if (!content) return null
     return (
       <div className="flex gap-1 mt-1">
         <Button
           size="small"
           type="text"
           icon={<FormOutlined />}
-          onClick={() => onFillReply(msg.content)}
+          onClick={() => onFillReply(content)}
         >
           {t('fill')}
         </Button>
@@ -52,7 +72,7 @@ export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillR
           type="text"
           icon={<CopyOutlined />}
           onClick={() => {
-            navigator.clipboard.writeText(msg.content)
+            navigator.clipboard.writeText(content)
             message.success(t('copied'))
           }}
         >
@@ -86,10 +106,17 @@ export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillR
                 placement: 'start',
                 avatar: <Avatar icon={<RobotOutlined />} style={{ background: '#2478AE', color: '#fff' }} />,
                 variant: 'outlined',
-                typing: { effect: 'typing' as const, step: 5, interval: 50 },
-                contentRender: (content) => (
-                  <XMarkdown>{typeof content === 'string' ? content : ''}</XMarkdown>
-                ),
+                contentRender: (content, info) => {
+                  const text = typeof content === 'string' ? content : ''
+                  const isStreamingNow = info.status === 'loading' || info.status === 'updating'
+                  return (
+                    <XMarkdown
+                      streaming={isStreamingNow ? { hasNextChunk: true, enableAnimation: true } : undefined}
+                    >
+                      {text}
+                    </XMarkdown>
+                  )
+                },
                 footer: assistantFooter,
               },
             }}
@@ -97,15 +124,17 @@ export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillR
         )}
       </div>
 
-      {/* 快捷操作：始终显示在输入框上方 */}
-      <QuickPrompts onSelect={onSend} compact={messages.length > 0} />
+      {/* 快捷操作 */}
+      <QuickPrompts onSelect={handleSubmit} compact={messages.length > 0} />
 
       {/* 输入框 */}
       <div className="p-3 border-t shrink-0">
         <Sender
+          value={inputValue}
+          onChange={(val: string) => setInputValue(val)}
           loading={loading}
           placeholder={t('inputPlaceholder')}
-          onSubmit={onSend}
+          onSubmit={handleSubmit}
           onCancel={onAbort}
         />
       </div>
@@ -113,7 +142,6 @@ export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillR
   )
 }
 
-/** 空状态欢迎屏 */
 function WelcomeScreen({ t }: { t: (key: TranslationKey, ...args: string[]) => string }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -122,20 +150,4 @@ function WelcomeScreen({ t }: { t: (key: TranslationKey, ...args: string[]) => s
       <p className="text-sm opacity-60">{t('welcomeDescription')}</p>
     </div>
   )
-}
-
-/** 映射内部 status 到 Bubble 的 status */
-function mapStatus(status?: Message['status']): BubbleStatus | undefined {
-  switch (status) {
-    case 'streaming':
-      return 'loading'
-    case 'done':
-      return 'success'
-    case 'error':
-      return 'error'
-    case 'pending':
-      return 'loading'
-    default:
-      return undefined
-  }
 }

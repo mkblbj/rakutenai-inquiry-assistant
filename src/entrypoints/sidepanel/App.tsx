@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { Button, Tooltip, message } from 'antd'
 import { SettingOutlined, ArrowLeftOutlined, FullscreenOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useSettingsStore, useHasHydrated } from '@/stores/settings'
@@ -7,32 +7,25 @@ import { useI18n } from '@/utils/i18n'
 import { ThemeProvider, useResolvedTheme } from '@/components/common/ThemeProvider'
 import { SettingsPanel } from '@/components/Settings'
 import { ChatPanel } from '@/components/ChatPanel'
-import type { Message } from '@/types/message'
+import { useStreamChat } from '@/hooks/useStreamChat'
+import { buildSystemPrompt } from '@/utils/build-system-prompt'
 import type { InquiryData } from '@/types/inquiry'
 
 function SidePanelContent() {
   const hasHydrated = useHasHydrated()
   const { t } = useI18n()
   const resolvedTheme = useResolvedTheme()
+  const settings = useSettingsStore()
 
   const currentView = useUIStore((s) => s.currentView)
   const toggleSettings = useUIStore((s) => s.toggleSettings)
   const setView = useUIStore((s) => s.setView)
 
-  // 对话状态
-  const [messages, setMessages] = useState<Message[]>([])
-  const [loading, setLoading] = useState(false)
-  const [inquiry, setInquiry] = useState<InquiryData | null>(null)
+  // AI 对话 (x-sdk)
+  const { messages, loading, sendMessage, abort, clearMessages } = useStreamChat()
 
-  // ref 保持最新 messages
-  const messagesRef = useRef<Message[]>([])
-  const setMessagesSafe = useCallback((updater: (prev: Message[]) => Message[]) => {
-    setMessages((prev) => {
-      const next = updater(prev)
-      messagesRef.current = next
-      return next
-    })
-  }, [])
+  // 问询上下文
+  const [inquiry, setInquiry] = useState<InquiryData | null>(null)
 
   // Side Panel 打开时，主动请求当前 Tab 的问询数据
   useEffect(() => {
@@ -61,61 +54,11 @@ function SidePanelContent() {
     return () => chrome.runtime.onMessage.removeListener(handler)
   }, [])
 
-  // 发送消息（Phase 4 仅做 UI 骨架，实际 AI 调用在 Phase 5）
+  // 发送消息：注入 system prompt
   const handleSend = useCallback((content: string) => {
-    const now = Date.now()
-
-    const userMsg: Message = {
-      id: `user-${now}`,
-      role: 'user',
-      content,
-      timestamp: now,
-      status: 'done',
-    }
-
-    const assistantMsg: Message = {
-      id: `assistant-${now}`,
-      role: 'assistant',
-      content: '',
-      timestamp: now,
-      status: 'streaming',
-    }
-
-    setMessagesSafe((prev) => [...prev, userMsg, assistantMsg])
-    setLoading(true)
-
-    // 临时 mock：逐步生成内容，模拟流式效果
-    const mockReply = `收到您的消息：「${content}」\n\n这是一条 **模拟回复**，用于验证 ChatPanel 的 UI 渲染。\n\n实际的 AI 对话将在 Phase 5 中接入。\n\n- Markdown 列表\n- **加粗** 和 *斜体*\n- \`代码片段\``
-    let idx = 0
-    const timer = setInterval(() => {
-      idx += 3
-      const partial = mockReply.slice(0, idx)
-      setMessagesSafe((prev) =>
-        prev.map((m) =>
-          m.id === assistantMsg.id ? { ...m, content: partial } : m
-        )
-      )
-      if (idx >= mockReply.length) {
-        clearInterval(timer)
-        setMessagesSafe((prev) =>
-          prev.map((m) =>
-            m.id === assistantMsg.id ? { ...m, status: 'done', content: mockReply } : m
-          )
-        )
-        setLoading(false)
-      }
-    }, 30)
-  }, [setMessagesSafe])
-
-  // 中断
-  const handleAbort = useCallback(() => {
-    setLoading(false)
-    setMessagesSafe((prev) =>
-      prev.map((m) =>
-        m.status === 'streaming' ? { ...m, status: 'done' } : m
-      )
-    )
-  }, [setMessagesSafe])
+    const systemPrompt = buildSystemPrompt(inquiry, settings.systemPrompt || undefined)
+    sendMessage(content, systemPrompt)
+  }, [inquiry, settings.systemPrompt, sendMessage])
 
   // 填充回复到页面
   const handleFillReply = useCallback(async (content: string) => {
@@ -134,17 +77,7 @@ function SidePanelContent() {
     }
   }, [t])
 
-  // 清空对话
-  const handleClear = useCallback(() => {
-    setMessages([])
-    messagesRef.current = []
-  }, [])
-
   const isDark = resolvedTheme === 'dark'
-
-  const openOptionsPage = () => {
-    chrome.runtime.openOptionsPage()
-  }
 
   return (
     <div className="h-screen flex flex-col">
@@ -173,7 +106,7 @@ function SidePanelContent() {
                 type="text"
                 size="small"
                 icon={<DeleteOutlined />}
-                onClick={handleClear}
+                onClick={clearMessages}
               />
             </Tooltip>
           )}
@@ -183,7 +116,7 @@ function SidePanelContent() {
                 type="text"
                 size="small"
                 icon={<FullscreenOutlined />}
-                onClick={openOptionsPage}
+                onClick={() => chrome.runtime.openOptionsPage()}
               />
             </Tooltip>
           )}
@@ -210,7 +143,7 @@ function SidePanelContent() {
           loading={loading}
           inquiry={inquiry}
           onSend={handleSend}
-          onAbort={handleAbort}
+          onAbort={abort}
           onFillReply={handleFillReply}
         />
       )}
