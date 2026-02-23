@@ -7,35 +7,49 @@ export default defineContentScript({
     'https://sellercentral.amazon.co.jp/*',
   ],
   main(ctx) {
+    console.log('[ContentScript] init, URL:', location.href)
     let extractor = ExtractorFactory.create(location.href)
+    console.log('[ContentScript] extractor:', extractor ? extractor.platform : 'none')
     if (!extractor) return
 
-    let lastInquiryId: string | null = null
+    // 用 JSON hash 比较，而不是只比 inquiryId
+    // 这样首次数据不完整时，第二次有更多字段也会触发更新
+    let lastDataHash: string | null = null
 
-    // 尝试提取并发送数据
     async function tryExtract() {
+      console.log('[ContentScript] tryExtract called')
       const data = await extractor?.extract()
-      if (data && data.inquiryId !== lastInquiryId) {
-        lastInquiryId = data.inquiryId
+      const hash = data ? JSON.stringify(data) : null
+      console.log('[ContentScript] extracted:', hash?.slice(0, 300) ?? 'null')
+
+      if (data && hash !== lastDataHash) {
+        lastDataHash = hash
         chrome.runtime.sendMessage({ type: 'INQUIRY_DATA', payload: data })
+        console.log('[ContentScript] sent INQUIRY_DATA')
+      } else if (data) {
+        console.log('[ContentScript] data unchanged, skip')
       }
     }
 
-    // SPA 路由变化处理：重建 Extractor + 重新提取
+    function scheduleExtract() {
+      void tryExtract()
+      // 延迟重试：SPA 异步渲染可能导致首次提取不完整
+      setTimeout(() => { void tryExtract() }, 500)
+      setTimeout(() => { void tryExtract() }, 1500)
+    }
+
     function handleRouteChange() {
       chrome.runtime.sendMessage({
         type: 'PAGE_CHANGED',
         payload: { url: location.href },
       })
       extractor = ExtractorFactory.create(location.href)
-      lastInquiryId = null
-      if (extractor) tryExtract()
+      lastDataHash = null
+      if (extractor) scheduleExtract()
     }
 
-    // 首次提取
-    tryExtract()
+    scheduleExtract()
 
-    // ===== SPA 路由监听 =====
     let lastUrl = location.href
     const checkUrlChange = () => {
       if (location.href !== lastUrl) {
@@ -44,29 +58,25 @@ export default defineContentScript({
       }
     }
 
-    // Hook history.pushState / replaceState
     const origPushState = history.pushState.bind(history)
     const origReplaceState = history.replaceState.bind(history)
     history.pushState = (...args) => { origPushState(...args); checkUrlChange() }
     history.replaceState = (...args) => { origReplaceState(...args); checkUrlChange() }
-
-    // 监听浏览器前进/后退
     window.addEventListener('popstate', checkUrlChange)
 
-    // 监听 Background 发来的指令
     const messageHandler = (msg: any, _sender: any, sendResponse: any) => {
       if (msg.type === 'REQUEST_EXTRACT') {
-        tryExtract()
+        console.log('[ContentScript] received REQUEST_EXTRACT')
+        scheduleExtract()
         return
       }
       if (msg.type === 'FILL_REPLY') {
         extractor?.fillReply(msg.payload.content).then(sendResponse)
-        return true // 异步响应
+        return true
       }
     }
     chrome.runtime.onMessage.addListener(messageHandler)
 
-    // 扩展更新 / content script 失效时清理资源
     ctx.onInvalidated(() => {
       history.pushState = origPushState
       history.replaceState = origReplaceState

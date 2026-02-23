@@ -22,7 +22,7 @@ function SidePanelContent() {
   const setView = useUIStore((s) => s.setView)
 
   // AI 对话 (x-sdk)
-  const { messages, loading, sendMessage, abort, clearMessages } = useStreamChat()
+  const { messages, loading, sendMessage, abort, clearMessages, imageStore, groundingStore } = useStreamChat()
 
   // 问询上下文
   const [inquiry, setInquiry] = useState<InquiryData | null>(null)
@@ -54,11 +54,23 @@ function SidePanelContent() {
     return () => chrome.runtime.onMessage.removeListener(handler)
   }, [])
 
-  // 发送消息：注入 system prompt
-  const handleSend = useCallback((content: string) => {
-    const systemPrompt = buildSystemPrompt(inquiry, settings.systemPrompt || undefined)
-    sendMessage(content, systemPrompt)
-  }, [inquiry, settings.systemPrompt, sendMessage])
+  // 发送消息：注入 Copilot system prompt + 可选图片
+  const handleSend = useCallback((content: string, images?: string[]) => {
+    if (images?.length) {
+      const m = (settings.model || '').toLowerCase()
+      const visionHints = ['gpt-4o', 'gpt-4-vision', 'vision', 'gemini', 'claude-3', 'claude-4', 'pixtral', 'qwen-vl', 'qwen2-vl']
+      const likelySupported = visionHints.some((h) => m.includes(h))
+      if (!likelySupported) {
+        message.warning(t('imageNotSupported'), 4)
+      }
+    }
+    const systemPrompt = buildSystemPrompt(inquiry, {
+      shopProfile: settings.shopProfile,
+      copilotPrompt: settings.copilotPrompt || undefined,
+      customPrompt: settings.systemPrompt || undefined,
+    })
+    sendMessage(content, systemPrompt, images)
+  }, [inquiry, settings.shopProfile, settings.copilotPrompt, settings.systemPrompt, settings.model, sendMessage, t])
 
   // 填充回复到页面
   const handleFillReply = useCallback(async (content: string) => {
@@ -145,6 +157,8 @@ function SidePanelContent() {
           onSend={handleSend}
           onAbort={abort}
           onFillReply={handleFillReply}
+          imageStore={imageStore}
+          groundingStore={groundingStore}
         />
       )}
     </div>

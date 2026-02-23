@@ -1,16 +1,18 @@
-import { useMemo, useCallback, useEffect, useRef } from 'react'
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react'
+import { streamText } from 'ai'
 import { OpenAIChatProvider, useXChat, XRequest } from '@ant-design/x-sdk'
 import type { XRequestOptions } from '@ant-design/x-sdk'
 import type { MessageInfo } from '@ant-design/x-sdk/es/x-chat'
 import type { XModelMessage, XModelParams } from '@ant-design/x-sdk/es/chat-providers/types/model'
 import { useSettingsStore } from '@/stores/settings'
+import { createGoogleProvider, type GroundingSource } from '@/providers/gemini-ai-sdk'
 
 const STORAGE_KEY = 'inquiry-ai-chat-messages'
 
 type MessageStatus = 'loading' | 'success' | 'error' | 'local' | 'updating' | 'abort'
+type StoredMessage = { message: XModelMessage; id?: string | number; status?: MessageStatus }
 
-/** 从 chrome.storage 加载消息 */
-async function loadMessages(): Promise<Array<{ message: XModelMessage; id?: string | number; status?: MessageStatus }>> {
+async function loadMessages(): Promise<StoredMessage[]> {
   try {
     const result = await chrome.storage.local.get(STORAGE_KEY)
     const raw = result[STORAGE_KEY]
@@ -22,9 +24,7 @@ async function loadMessages(): Promise<Array<{ message: XModelMessage; id?: stri
   }
 }
 
-/** 保存消息到 chrome.storage */
 function saveMessages(messages: MessageInfo<XModelMessage>[]) {
-  // 只存完成的消息，排除 streaming 中的
   const toSave = messages
     .filter((m) => m.status === 'success' || m.status === 'local' || m.status === 'error')
     .map((m) => ({
@@ -36,16 +36,65 @@ function saveMessages(messages: MessageInfo<XModelMessage>[]) {
 }
 
 /**
- * 基于 @ant-design/x-sdk 的 AI 对话 hook
- * 使用 OpenAIChatProvider + useXChat + XRequest
+ * 用 groundingSupports 的 segment 信息，在文本对应位置注入 <sup>N</sup> 标记。
+ * 从后往前插入，避免偏移量错位。
+ */
+function injectGroundingSups(text: string, supports: any[]): string {
+  const insertions: Array<{ index: number; sups: string }> = []
+
+  for (const support of supports) {
+    const endIndex = support.segment?.endIndex
+    if (endIndex == null) continue
+    const chunkIndices: number[] = support.groundingChunkIndices || []
+    if (chunkIndices.length === 0) continue
+    const supTags = chunkIndices.map((i: number) => `<sup>${i + 1}</sup>`).join('')
+    insertions.push({ index: endIndex, sups: supTags })
+  }
+
+  if (insertions.length === 0) return text
+
+  // Merge insertions at the same index
+  const merged = new Map<number, string>()
+  for (const ins of insertions) {
+    merged.set(ins.index, (merged.get(ins.index) || '') + ins.sups)
+  }
+
+  let result = text
+  // Sort descending so earlier inserts don't shift later indices
+  const entries = Array.from(merged.entries()).sort((a, b) => b[0] - a[0])
+  for (const [index, sups] of entries) {
+    if (index <= result.length) {
+      result = result.slice(0, index) + sups + result.slice(index)
+    }
+  }
+
+  return result
+}
+
+const RELAXED_SAFETY = [
+  { category: 'HARM_CATEGORY_HARASSMENT' as const, threshold: 'BLOCK_NONE' as const },
+  { category: 'HARM_CATEGORY_HATE_SPEECH' as const, threshold: 'BLOCK_NONE' as const },
+  { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT' as const, threshold: 'BLOCK_NONE' as const },
+  { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as const, threshold: 'BLOCK_NONE' as const },
+]
+
+/**
+ * 统一 AI 对话 hook
+ * OpenAI Compatible → useXChat + OpenAIChatProvider
+ * Gemini Native → @ai-sdk/google + streamText
  */
 export function useStreamChat() {
   const settings = useSettingsStore()
+  const isGemini = settings.provider === 'gemini'
 
-  // 动态创建 provider（apiUrl / apiKey / model 变更时重建）
-  const provider = useMemo(() => {
+  const imageStoreRef = useRef<Map<string, string[]>>(new Map())
+  const groundingStoreRef = useRef<Map<string, GroundingSource[]>>(new Map())
+
+  // ================================================================
+  // OpenAI path (useXChat — always called, hooks can't be conditional)
+  // ================================================================
+  const openaiProvider = useMemo(() => {
     const baseUrl = (settings.apiUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
-
     const request = XRequest(`${baseUrl}/chat/completions`, {
       manual: true,
       headers: {
@@ -58,62 +107,256 @@ export function useStreamChat() {
         stream: settings.streamEnabled !== false,
       } as Partial<XModelParams>,
     } as XRequestOptions<XModelParams, any>)
-
     return new OpenAIChatProvider({ request })
   }, [settings.apiUrl, settings.apiKey, settings.model, settings.temperature, settings.streamEnabled])
 
   const {
-    messages,
-    parsedMessages,
-    onRequest,
-    isRequesting,
-    abort,
-    setMessages,
+    messages: openaiMessages,
+    onRequest: openaiOnRequest,
+    isRequesting: openaiLoading,
+    abort: openaiAbort,
+    setMessages: setOpenaiMessages,
   } = useXChat<XModelMessage>({
-    provider,
-    // 从 chrome.storage 恢复历史消息
+    provider: openaiProvider as any,
     defaultMessages: loadMessages,
-    requestPlaceholder: {
-      role: 'assistant',
-      content: '',
-    },
-    requestFallback: {
-      role: 'assistant',
-      content: '⚠️ 请求失败，请检查 API 配置后重试。',
-    },
+    requestPlaceholder: { role: 'assistant', content: '' },
+    requestFallback: { role: 'assistant', content: '⚠️ 请求失败，请检查 API 配置后重试。' },
   })
 
-  // 消息变化时持久化（防抖）
+  // ================================================================
+  // Gemini path (@ai-sdk/google + streamText)
+  // ================================================================
+  const [geminiMessages, setGeminiMessages] = useState<MessageInfo<XModelMessage>[]>([])
+  const [geminiLoading, setGeminiLoading] = useState(false)
+  const geminiAbortRef = useRef<AbortController | null>(null)
+  const geminiIdRef = useRef(Date.now())
+
+  useEffect(() => {
+    loadMessages().then((msgs) => setGeminiMessages(msgs as MessageInfo<XModelMessage>[]))
+  }, [])
+
+  const googleProvider = useMemo(() => {
+    if (!settings.geminiApiKey) return null
+    return createGoogleProvider({
+      apiKey: settings.geminiApiKey,
+      baseUrl: settings.geminiBaseUrl || undefined,
+    })
+  }, [settings.geminiApiKey, settings.geminiBaseUrl])
+
+  const geminiSend = useCallback(
+    async (content: string, systemPrompt?: string, images?: string[]) => {
+      if (!googleProvider) return
+
+      const userId = ++geminiIdRef.current
+      const assistantId = ++geminiIdRef.current
+
+      const userMsg: MessageInfo<XModelMessage> = {
+        id: userId,
+        message: { role: 'user', content },
+        status: 'local',
+      }
+      const assistantMsg: MessageInfo<XModelMessage> = {
+        id: assistantId,
+        message: { role: 'assistant', content: '' },
+        status: 'loading',
+      }
+
+      setGeminiMessages((prev) => [...prev, userMsg, assistantMsg])
+      setGeminiLoading(true)
+
+      if (images?.length) {
+        imageStoreRef.current.set(content.slice(0, 80), images)
+      }
+
+      // Build AI SDK user message (text or multimodal)
+      const userParts: any[] = images?.length
+        ? [
+            { type: 'text' as const, text: content },
+            ...images.map((url) => ({
+              type: 'image' as const,
+              image: url,
+            })),
+          ]
+        : [{ type: 'text' as const, text: content }]
+
+      const aiMessages = [{ role: 'user' as const, content: userParts }]
+
+      // Google-specific provider options
+      const googleOptions: Record<string, any> = {
+        safetySettings: RELAXED_SAFETY,
+      }
+      const tb = settings.thinkingBudget ?? -1
+      if (tb === 0) {
+        googleOptions.thinkingConfig = { thinkingBudget: 0 }
+      } else if (tb > 0) {
+        googleOptions.thinkingConfig = { thinkingBudget: tb }
+      }
+
+      const abortController = new AbortController()
+      geminiAbortRef.current = abortController
+
+      try {
+        const model = googleProvider(settings.geminiModel || 'gemini-2.5-flash')
+
+        const result = streamText({
+          model,
+          system: systemPrompt,
+          messages: aiMessages,
+          temperature: settings.temperature ?? 0.4,
+          maxOutputTokens: settings.maxTokens || undefined,
+          providerOptions: { google: googleOptions },
+          ...(settings.webSearchEnabled
+            ? { tools: { google_search: googleProvider.tools.googleSearch({}) } }
+            : {}),
+          abortSignal: abortController.signal,
+          maxRetries: 0,
+        })
+
+        let accumulated = ''
+        for await (const chunk of result.textStream) {
+          accumulated += chunk
+          const snap = accumulated
+          setGeminiMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, message: { role: 'assistant', content: snap } }
+                : m,
+            ),
+          )
+        }
+
+        // Extract grounding metadata and inject inline <sup> references
+        let finalText = accumulated
+        try {
+          const [sources, meta] = await Promise.all([
+            result.sources,
+            result.providerMetadata,
+          ])
+
+          const googleMeta = (meta as any)?.google
+          const supports: any[] | undefined =
+            googleMeta?.groundingMetadata?.groundingSupports
+
+          // Inject <sup> tags at segment boundaries using groundingSupports
+          if (supports?.length) {
+            finalText = injectGroundingSups(finalText, supports)
+          }
+
+          // Store URL sources (keyed by finalText which may now contain sups)
+          if (sources?.length) {
+            const urlSources = sources.filter(
+              (s): s is Extract<typeof s, { sourceType: 'url' }> =>
+                s.type === 'source' && s.sourceType === 'url',
+            )
+            const gs: GroundingSource[] = urlSources.map((s, i) => ({
+              key: `gs-${i}`,
+              title: s.title || s.url,
+              url: s.url,
+            }))
+            if (gs.length) {
+              groundingStoreRef.current.set(finalText.slice(0, 80), gs)
+            }
+          }
+        } catch {
+          // sources/metadata may not be available for all models
+        }
+
+        setGeminiMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, message: { role: 'assistant', content: finalText }, status: 'success' }
+              : m,
+          ),
+        )
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          setGeminiMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    message: { role: 'assistant', content: `⚠️ 请求失败: ${err.message}` },
+                    status: 'error',
+                  }
+                : m,
+            ),
+          )
+        }
+      } finally {
+        setGeminiLoading(false)
+        geminiAbortRef.current = null
+      }
+    },
+    [googleProvider, settings.geminiModel, settings.temperature, settings.maxTokens, settings.webSearchEnabled, settings.thinkingBudget],
+  )
+
+  // ================================================================
+  // Unified interface
+  // ================================================================
+  const messages = isGemini ? geminiMessages : openaiMessages
+  const loading = isGemini ? geminiLoading : openaiLoading
+
+  // Persistence (debounced, saves active provider's messages)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      saveMessages(messages)
-    }, 500)
+    saveTimerRef.current = setTimeout(() => saveMessages(messages), 500)
   }, [messages])
 
-  // 发送消息（注入 system prompt 到 messages 参数中）
-  const sendMessage = useCallback((content: string, systemPrompt?: string) => {
-    const params: Partial<XModelParams> = {
-      messages: [
-        ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
-        { role: 'user', content },
-      ],
+  const sendMessage = useCallback(
+    (content: string, systemPrompt?: string, images?: string[]) => {
+      if (isGemini) {
+        geminiSend(content, systemPrompt, images)
+        return
+      }
+
+      // OpenAI path
+      const hasImages = images && images.length > 0
+      let userContent: any = content
+      if (hasImages) {
+        userContent = [
+          { type: 'text', text: content },
+          ...images.map((url) => ({ type: 'image_url', image_url: { url } })),
+        ]
+        imageStoreRef.current.set(content.slice(0, 80), images)
+      }
+
+      const params: Partial<XModelParams> = {
+        messages: [
+          ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+          { role: 'user', content: userContent },
+        ],
+      }
+      openaiOnRequest(params as any)
+    },
+    [isGemini, geminiSend, openaiOnRequest],
+  )
+
+  const abort = useCallback(() => {
+    if (isGemini) {
+      geminiAbortRef.current?.abort()
+    } else {
+      openaiAbort()
     }
-    onRequest(params)
-  }, [onRequest])
+  }, [isGemini, openaiAbort])
 
   const clearMessages = useCallback(() => {
-    setMessages([])
+    if (isGemini) {
+      setGeminiMessages([])
+    } else {
+      setOpenaiMessages([])
+    }
     chrome.storage.local.remove(STORAGE_KEY).catch(() => {})
-  }, [setMessages])
+  }, [isGemini, setOpenaiMessages])
 
   return {
     messages,
-    parsedMessages,
-    loading: isRequesting,
+    parsedMessages: messages,
+    loading,
     sendMessage,
     abort,
     clearMessages,
+    imageStore: imageStoreRef.current,
+    groundingStore: groundingStoreRef.current,
   }
 }

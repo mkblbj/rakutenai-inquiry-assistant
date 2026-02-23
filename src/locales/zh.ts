@@ -57,8 +57,68 @@ export const zh = {
   connectionError: '连接错误',
   maxTokens: '最大 Token',
   streamOutput: '流式输出',
-  systemPromptLabel: '系统提示词',
+  copilotPromptLabel: 'Copilot 核心提示词',
+  copilotPromptHint: '控制 AI 的角色定义、硬性约束和输出格式。修改后可能影响草稿质量，点击"恢复默认"可还原内置版本。',
+  systemPromptLabel: '追加规则',
+  systemPromptHint: '此处填写的内容会作为"追加规则"附加到 Copilot 内置提示词之后，不会替换核心指令。留空则仅使用内置提示词。',
   resetDefaults: '恢复默认',
+
+  // 店铺规则
+  shopProfileLabel: '店铺规则',
+  shopName: '店铺名称',
+  returnPolicy: '退货规则',
+  exchangePolicy: '换货规则',
+  cancelPolicy: '取消规则',
+  shippingPolicy: '运费/补发规则',
+  processNotes: '常用流程',
+  signature: '落款模板',
+  shopProfileHint: '填写店铺规则后，AI 将依据规则生成草稿',
+
+  // 上下文增强
+  contextThread: '对话记录',
+  contextThreadCount: '{0} 条消息',
+  contextFulfillment: '物流状态',
+  fulfillmentNotShipped: '未发货',
+  fulfillmentShipping: '配送中',
+  fulfillmentDelivered: '已签收',
+  fulfillmentUnknown: '未知',
+
+  // Copilot
+  promptGenerateDraft: '生成草稿',
+  promptFinalize: '生成最终版',
+  fillDraft: '填充草稿',
+  fillBlocked: '有待确认项，无法直接填充',
+  fillConfirmTitle: '确认填充',
+  fillConfirmDesc: '草稿中存在风险提示，确认填充？',
+
+  // Provider
+  providerLabel: '服务商',
+  providerOpenai: 'OpenAI 兼容',
+  providerGemini: 'Gemini 原生',
+
+  // Gemini 专用
+  webSearchEnabled: '联网搜索',
+  webSearchHint: '启用后模型会先搜索再回答，延迟略增',
+  thinkingBudget: '思维链长度',
+  thinkingBudgetHint: '增加思考预算可提升复杂推理质量，但增加延迟和 token 消耗（0 = 关闭）',
+  thinkingBudgetOff: '关闭',
+  thinkingDefault: '默认',
+  thinkingDefaultDesc: '依赖模型默认行为',
+  thinkingOff: '关闭',
+  thinkingOffDesc: '禁用推理',
+  thinkingLight: '浮想',
+  thinkingLightDesc: '低强度推理',
+  thinkingMedium: '斟酌',
+  thinkingMediumDesc: '中强度推理',
+  thinkingDeep: '沉思',
+  thinkingDeepDesc: '高强度推理',
+  groundingSources: '参考来源',
+
+  // 图片
+  imageUpload: '上传图片',
+  imageMaxReached: '最多附加 4 张图片',
+  imageLoadFailed: '图片加载失败',
+  imageNotSupported: '当前模型可能不支持图片分析',
 
   // 导入导出
   exportSettings: '导出配置',

@@ -5,6 +5,16 @@ export type Language = 'zh' | 'ja' | 'en'
 export type Theme = 'light' | 'dark' | 'system'
 export type Provider = 'openai' | 'gemini' | 'custom'
 
+export interface ShopProfile {
+  shopName?: string
+  returnPolicy?: string
+  exchangePolicy?: string
+  cancelPolicy?: string
+  shippingPolicy?: string
+  processNotes?: string
+  signature?: string
+}
+
 export interface SettingsState {
   // 界面设置
   language: Language
@@ -16,21 +26,39 @@ export interface SettingsState {
   apiKey: string
   model: string
 
+  // Gemini Native 独立配置
+  geminiBaseUrl: string
+  geminiApiKey: string
+  geminiModel: string
+
   // 对话设置
   temperature: number
   maxTokens: number
   streamEnabled: boolean
 
+  // Gemini Native 专用
+  webSearchEnabled: boolean
+  thinkingBudget: number
+
   // 提示词模板
+  copilotPrompt: string
   systemPrompt: string
+
+  // 店铺规则
+  shopProfile: ShopProfile
 
   // Actions
   setLanguage: (lang: Language) => void
   setTheme: (theme: Theme) => void
   setProvider: (provider: Provider) => void
   setApiConfig: (config: { apiUrl?: string; apiKey?: string; model?: string }) => void
+  setGeminiConfig: (config: { geminiBaseUrl?: string; geminiApiKey?: string; geminiModel?: string }) => void
   setDialogSettings: (settings: { temperature?: number; maxTokens?: number; streamEnabled?: boolean }) => void
+  setWebSearchEnabled: (enabled: boolean) => void
+  setThinkingBudget: (budget: number) => void
+  setCopilotPrompt: (prompt: string) => void
   setSystemPrompt: (prompt: string) => void
+  setShopProfile: (profile: Partial<ShopProfile>) => void
   resetToDefaults: () => void
 }
 
@@ -41,10 +69,17 @@ const defaultSettings = {
   apiUrl: 'https://api.openai.com/v1',
   apiKey: '',
   model: 'gpt-4o-mini',
-  temperature: 0.7,
+  geminiBaseUrl: '',
+  geminiApiKey: '',
+  geminiModel: 'gemini-2.5-flash',
+  temperature: 0.4,
   maxTokens: 4096,
   streamEnabled: true,
+  webSearchEnabled: false,
+  thinkingBudget: -1,
+  copilotPrompt: '',
   systemPrompt: '',
+  shopProfile: {} as ShopProfile,
 }
 
 // chrome.storage 适配器 (异步)
@@ -72,8 +107,13 @@ export const useSettingsStore = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
       setProvider: (provider) => set({ provider }),
       setApiConfig: (config) => set((state) => ({ ...state, ...config })),
+      setGeminiConfig: (config) => set((state) => ({ ...state, ...config })),
       setDialogSettings: (settings) => set((state) => ({ ...state, ...settings })),
+      setWebSearchEnabled: (webSearchEnabled) => set({ webSearchEnabled }),
+      setThinkingBudget: (thinkingBudget) => set({ thinkingBudget }),
+      setCopilotPrompt: (copilotPrompt) => set({ copilotPrompt }),
       setSystemPrompt: (systemPrompt) => set({ systemPrompt }),
+      setShopProfile: (profile) => set((state) => ({ shopProfile: { ...state.shopProfile, ...profile } })),
       resetToDefaults: () => set(defaultSettings),
     }),
     {
