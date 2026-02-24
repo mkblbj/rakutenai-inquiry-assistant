@@ -10,6 +10,9 @@ export default defineConfig({
   },
   vite: () => ({
     plugins: [tailwindcss()],
+    optimizeDeps: {
+      include: ['@ant-design/x-markdown/plugins/Latex', 'marked-alert'],
+    },
   }),
   manifest: {
     name: '__MSG_extName__',

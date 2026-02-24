@@ -10,6 +10,8 @@ import {
 } from '@ant-design/icons'
 import { useSettingsStore } from '@/stores/settings'
 import { XMarkdown } from '@ant-design/x-markdown'
+import Latex from '@ant-design/x-markdown/plugins/Latex'
+import markedAlert from 'marked-alert'
 import type { ComponentProps } from '@ant-design/x-markdown'
 import type { MessageInfo } from '@ant-design/x-sdk/es/x-chat'
 import type { XModelMessage } from '@ant-design/x-sdk/es/chat-providers/types/model'
@@ -21,6 +23,12 @@ import { ContextCard } from './ContextCard'
 import type { InquiryData } from '@/types/inquiry'
 import type { GroundingSource } from '@/providers/gemini-ai-sdk'
 import type { TranslationKey } from '@/locales/zh'
+
+const alertPlugin = markedAlert()
+const markdownConfig = {
+  extensions: [...Latex(), ...(alertPlugin.extensions as any[] || [])],
+  walkTokens: alertPlugin.walkTokens as any,
+}
 
 function createSupComponent(sources: GroundingSource[]) {
   const items = sources.map((s, i) => ({
@@ -271,6 +279,7 @@ export function ChatPanel({ messages, loading, inquiry, onSend, onAbort, onFillR
                     <XMarkdown
                       streaming={isStreamingNow ? { hasNextChunk: true, enableAnimation: true } : undefined}
                       components={supComp ? { sup: supComp } : undefined}
+                      config={markdownConfig}
                     >
                       {text}
                     </XMarkdown>
