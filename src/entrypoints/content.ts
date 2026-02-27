@@ -12,8 +12,6 @@ export default defineContentScript({
     console.log('[ContentScript] extractor:', extractor ? extractor.platform : 'none')
     if (!extractor) return
 
-    // 用 JSON hash 比较，而不是只比 inquiryId
-    // 这样首次数据不完整时，第二次有更多字段也会触发更新
     let lastDataHash: string | null = null
 
     async function tryExtract() {
@@ -31,11 +29,13 @@ export default defineContentScript({
       }
     }
 
+    let extractTimer: ReturnType<typeof setTimeout> | null = null
+
     function scheduleExtract() {
+      if (extractTimer) clearTimeout(extractTimer)
       void tryExtract()
-      // 延迟重试：SPA 异步渲染可能导致首次提取不完整
       setTimeout(() => { void tryExtract() }, 500)
-      setTimeout(() => { void tryExtract() }, 1500)
+      extractTimer = setTimeout(() => { void tryExtract() }, 1500)
     }
 
     function handleRouteChange() {
@@ -50,19 +50,48 @@ export default defineContentScript({
 
     scheduleExtract()
 
+    // === URL 变化检测（多重策略覆盖各种 SPA 路由方式） ===
+
     let lastUrl = location.href
     const checkUrlChange = () => {
       if (location.href !== lastUrl) {
+        console.log('[ContentScript] URL changed:', lastUrl, '→', location.href)
         lastUrl = location.href
         handleRouteChange()
       }
     }
 
+    // 策略 1: 拦截 history.pushState / replaceState
     const origPushState = history.pushState.bind(history)
     const origReplaceState = history.replaceState.bind(history)
     history.pushState = (...args) => { origPushState(...args); checkUrlChange() }
     history.replaceState = (...args) => { origReplaceState(...args); checkUrlChange() }
     window.addEventListener('popstate', checkUrlChange)
+
+    // 策略 2: 轮询 URL（兜底：某些框架在 pushState 之前已缓存原始引用，
+    //         或使用 Navigation API / location.href 赋值等我们无法拦截的方式）
+    const urlPollInterval = setInterval(checkUrlChange, 800)
+
+    // 策略 3: MutationObserver 监听 DOM 变化
+    // 当 DOM 发生大量变化时（SPA 路由切换的典型特征），检查 URL 并触发重新提取
+    let mutationDebounce: ReturnType<typeof setTimeout> | null = null
+    const observer = new MutationObserver(() => {
+      if (mutationDebounce) clearTimeout(mutationDebounce)
+      mutationDebounce = setTimeout(() => {
+        checkUrlChange()
+        // 即使 URL 没变，inquiryId 也可能从 URL 以外的地方变化
+        // 比如 master-detail 布局中只更新了右侧面板
+        if (extractor) {
+          void tryExtract()
+        }
+      }, 300)
+    })
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: false,
+      attributes: false,
+    })
 
     const messageHandler = (msg: any, _sender: any, sendResponse: any) => {
       if (msg.type === 'REQUEST_EXTRACT') {
@@ -81,6 +110,9 @@ export default defineContentScript({
       history.pushState = origPushState
       history.replaceState = origReplaceState
       window.removeEventListener('popstate', checkUrlChange)
+      clearInterval(urlPollInterval)
+      if (mutationDebounce) clearTimeout(mutationDebounce)
+      observer.disconnect()
       chrome.runtime.onMessage.removeListener(messageHandler)
     })
   },

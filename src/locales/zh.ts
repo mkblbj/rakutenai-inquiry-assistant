@@ -131,6 +131,13 @@ export const zh = {
   importSuccess: '配置已导入',
   importFailed: '导入失败：格式无效',
   importConfirm: '导入将覆盖当前配置，确定继续？',
+
+  // 对话管理
+  convList: '对话列表',
+  convEmpty: '暂无对话记录',
+  convCount: '{0} 个对话',
+  convClearAll: '清除全部',
+  convSwitchHint: '切换到其他问询页面将自动创建/切换对话',
 } as const
 
 export type TranslationKey = keyof typeof zh

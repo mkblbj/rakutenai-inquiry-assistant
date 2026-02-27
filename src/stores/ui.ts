@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ViewType = 'chat' | 'settings'
+export type ViewType = 'chat' | 'settings' | 'conversations'
 
 interface UIState {
   currentView: ViewType

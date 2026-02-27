@@ -1,18 +1,27 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import { Button, Tooltip, message } from 'antd'
-import { SettingOutlined, ArrowLeftOutlined, FullscreenOutlined, DeleteOutlined } from '@ant-design/icons'
+import {
+  SettingOutlined,
+  ArrowLeftOutlined,
+  FullscreenOutlined,
+  DeleteOutlined,
+  UnorderedListOutlined,
+} from '@ant-design/icons'
 import { useSettingsStore, useHasHydrated } from '@/stores/settings'
+import { useConversationStore, useConversationHasHydrated } from '@/stores/conversation'
 import { useUIStore } from '@/stores/ui'
 import { useI18n } from '@/utils/i18n'
 import { ThemeProvider, useResolvedTheme } from '@/components/common/ThemeProvider'
 import { SettingsPanel } from '@/components/Settings'
 import { ChatPanel } from '@/components/ChatPanel'
+import { ConversationList } from '@/components/ConversationList'
 import { useStreamChat } from '@/hooks/useStreamChat'
+import { useInquiryContextBridge } from '@/hooks/useInquiryContextBridge'
 import { buildSystemPrompt } from '@/utils/build-system-prompt'
-import type { InquiryData } from '@/types/inquiry'
 
 function SidePanelContent() {
-  const hasHydrated = useHasHydrated()
+  const settingsHydrated = useHasHydrated()
+  const convHydrated = useConversationHasHydrated()
   const { t } = useI18n()
   const resolvedTheme = useResolvedTheme()
   const settings = useSettingsStore()
@@ -21,38 +30,15 @@ function SidePanelContent() {
   const toggleSettings = useUIStore((s) => s.toggleSettings)
   const setView = useUIStore((s) => s.setView)
 
-  // AI 对话 (x-sdk)
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
+  const conversations = useConversationStore((s) => s.conversations)
+  const conversationCount = Object.keys(conversations).length
+
+  // Bridge hook: 监听问询更新，自动管理对话切换
+  const { inquiry } = useInquiryContextBridge()
+
+  // AI 对话 (消息按对话隔离)
   const { messages, loading, sendMessage, abort, clearMessages, imageStore, groundingStore } = useStreamChat()
-
-  // 问询上下文
-  const [inquiry, setInquiry] = useState<InquiryData | null>(null)
-
-  // Side Panel 打开时，主动请求当前 Tab 的问询数据
-  useEffect(() => {
-    if (!hasHydrated) return
-    ;(async () => {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (tab?.id) {
-        chrome.runtime.sendMessage({
-          type: 'REQUEST_EXTRACT',
-          payload: { tabId: tab.id },
-        }).catch(() => {})
-      }
-    })()
-  }, [hasHydrated])
-
-  // 监听 Background 推送的问询数据
-  useEffect(() => {
-    const handler = (msg: any) => {
-      if (msg.type === 'INQUIRY_UPDATED') {
-        setInquiry(msg.payload)
-      } else if (msg.type === 'TAB_CHANGED' || msg.type === 'TAB_CLOSED') {
-        setInquiry(null)
-      }
-    }
-    chrome.runtime.onMessage.addListener(handler)
-    return () => chrome.runtime.onMessage.removeListener(handler)
-  }, [])
 
   // 发送消息：注入 Copilot system prompt + 可选图片
   const handleSend = useCallback((content: string, images?: string[]) => {
@@ -91,6 +77,25 @@ function SidePanelContent() {
 
   const isDark = resolvedTheme === 'dark'
 
+  // 等待 stores 完成 hydration
+  if (!settingsHydrated || !convHydrated) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <span className="text-sm opacity-50">{t('loading')}</span>
+      </div>
+    )
+  }
+
+  // 当前活跃对话的客户名（用于 header 显示）
+  const activeConv = activeConversationId ? conversations[activeConversationId] : null
+  const headerTitle = currentView === 'settings'
+    ? t('settings')
+    : currentView === 'conversations'
+      ? t('convList')
+      : activeConv
+        ? activeConv.customerName
+        : t('welcomeTitle')
+
   return (
     <div className="h-screen flex flex-col">
       {/* Header */}
@@ -98,8 +103,8 @@ function SidePanelContent() {
         className="flex items-center justify-between px-4 py-3 border-b shrink-0"
         style={{ borderColor: isDark ? '#303030' : '#f0f0f0' }}
       >
-        <div className="flex items-center gap-2">
-          {currentView === 'settings' && (
+        <div className="flex items-center gap-2 min-w-0">
+          {(currentView === 'settings' || currentView === 'conversations') && (
             <Button
               type="text"
               size="small"
@@ -107,11 +112,9 @@ function SidePanelContent() {
               onClick={() => setView('chat')}
             />
           )}
-          <span className="font-bold text-base">
-            {currentView === 'settings' ? t('settings') : t('welcomeTitle')}
-          </span>
+          <span className="font-bold text-base truncate">{headerTitle}</span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {currentView === 'chat' && messages.length > 0 && (
             <Tooltip title={t('messagesClearConfirm')}>
               <Button
@@ -119,6 +122,17 @@ function SidePanelContent() {
                 size="small"
                 icon={<DeleteOutlined />}
                 onClick={clearMessages}
+              />
+            </Tooltip>
+          )}
+          {currentView === 'chat' && (
+            <Tooltip title={t('convList')}>
+              <Button
+                type="text"
+                size="small"
+                icon={<UnorderedListOutlined />}
+                onClick={() => setView('conversations')}
+                style={conversationCount > 0 ? undefined : { opacity: 0.4 }}
               />
             </Tooltip>
           )}
@@ -149,6 +163,8 @@ function SidePanelContent() {
       {/* Content */}
       {currentView === 'settings' ? (
         <SettingsPanel />
+      ) : currentView === 'conversations' ? (
+        <ConversationList />
       ) : (
         <ChatPanel
           messages={messages}

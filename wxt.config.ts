@@ -18,7 +18,7 @@ export default defineConfig({
     name: '__MSG_extName__',
     description: '__MSG_extDescription__',
     default_locale: 'ja',
-    permissions: ['storage', 'tabs', 'permissions'],
+    permissions: ['storage', 'unlimitedStorage', 'tabs', 'permissions'],
     host_permissions: [
       'https://*.rakuten.co.jp/*',
       'https://*.mercari.com/*',

@@ -113,4 +113,10 @@ export const en: Record<TranslationKey, string> = {
   importSuccess: 'Settings imported',
   importFailed: 'Import failed: invalid format',
   importConfirm: 'Import will overwrite current settings. Continue?',
+
+  convList: 'Conversations',
+  convEmpty: 'No conversations yet',
+  convCount: '{0} conversations',
+  convClearAll: 'Clear All',
+  convSwitchHint: 'Switching to another inquiry page will auto-create/switch conversations',
 }

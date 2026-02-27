@@ -113,4 +113,10 @@ export const ja: Record<TranslationKey, string> = {
   importSuccess: '設定をインポートしました',
   importFailed: 'インポート失敗：無効な形式',
   importConfirm: 'インポートすると現在の設定が上書きされます。続行しますか？',
+
+  convList: '会話リスト',
+  convEmpty: '会話履歴はありません',
+  convCount: '{0} 件の会話',
+  convClearAll: 'すべてクリア',
+  convSwitchHint: '別のお問い合わせページに切り替えると、会話が自動的に作成・切り替わります',
 }

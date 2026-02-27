@@ -5,35 +5,10 @@ import type { XRequestOptions } from '@ant-design/x-sdk'
 import type { MessageInfo } from '@ant-design/x-sdk/es/x-chat'
 import type { XModelMessage, XModelParams } from '@ant-design/x-sdk/es/chat-providers/types/model'
 import { useSettingsStore } from '@/stores/settings'
+import { useConversationStore } from '@/stores/conversation'
 import { createGoogleProvider, type GroundingSource } from '@/providers/gemini-ai-sdk'
 
-const STORAGE_KEY = 'inquiry-ai-chat-messages'
-
 type MessageStatus = 'loading' | 'success' | 'error' | 'local' | 'updating' | 'abort'
-type StoredMessage = { message: XModelMessage; id?: string | number; status?: MessageStatus }
-
-async function loadMessages(): Promise<StoredMessage[]> {
-  try {
-    const result = await chrome.storage.local.get(STORAGE_KEY)
-    const raw = result[STORAGE_KEY]
-    if (!raw) return []
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-    return Array.isArray(parsed) ? parsed : []
-  } catch {
-    return []
-  }
-}
-
-function saveMessages(messages: MessageInfo<XModelMessage>[]) {
-  const toSave = messages
-    .filter((m) => m.status === 'success' || m.status === 'local' || m.status === 'error')
-    .map((m) => ({
-      id: m.id,
-      message: m.message,
-      status: m.status,
-    }))
-  chrome.storage.local.set({ [STORAGE_KEY]: toSave }).catch(() => {})
-}
 
 /**
  * 用 groundingSupports 的 segment 信息，在文本对应位置注入 <sup>N</sup> 标记。
@@ -53,14 +28,12 @@ function injectGroundingSups(text: string, supports: any[]): string {
 
   if (insertions.length === 0) return text
 
-  // Merge insertions at the same index
   const merged = new Map<number, string>()
   for (const ins of insertions) {
     merged.set(ins.index, (merged.get(ins.index) || '') + ins.sups)
   }
 
   let result = text
-  // Sort descending so earlier inserts don't shift later indices
   const entries = Array.from(merged.entries()).sort((a, b) => b[0] - a[0])
   for (const [index, sups] of entries) {
     if (index <= result.length) {
@@ -78,14 +51,19 @@ const RELAXED_SAFETY = [
   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT' as const, threshold: 'BLOCK_NONE' as const },
 ]
 
+const EMPTY_MESSAGES: never[] = []
+
 /**
  * 统一 AI 对话 hook
- * OpenAI Compatible → useXChat + OpenAIChatProvider
- * Gemini Native → @ai-sdk/google + streamText
+ * - 消息按 activeConversationId 隔离，持久化到 ConversationStore
+ * - OpenAI Compatible → useXChat + OpenAIChatProvider
+ * - Gemini Native → @ai-sdk/google + streamText
  */
 export function useStreamChat() {
   const settings = useSettingsStore()
   const isGemini = settings.provider === 'gemini'
+
+  const activeConversationId = useConversationStore((s) => s.activeConversationId)
 
   const imageStoreRef = useRef<Map<string, string[]>>(new Map())
   const groundingStoreRef = useRef<Map<string, GroundingSource[]>>(new Map())
@@ -118,7 +96,7 @@ export function useStreamChat() {
     setMessages: setOpenaiMessages,
   } = useXChat<XModelMessage>({
     provider: openaiProvider as any,
-    defaultMessages: loadMessages,
+    defaultMessages: () => Promise.resolve(EMPTY_MESSAGES),
     requestPlaceholder: { role: 'assistant', content: '' },
     requestFallback: { role: 'assistant', content: '⚠️ 请求失败，请检查 API 配置后重试。' },
   })
@@ -130,10 +108,6 @@ export function useStreamChat() {
   const [geminiLoading, setGeminiLoading] = useState(false)
   const geminiAbortRef = useRef<AbortController | null>(null)
   const geminiIdRef = useRef(Date.now())
-
-  useEffect(() => {
-    loadMessages().then((msgs) => setGeminiMessages(msgs as MessageInfo<XModelMessage>[]))
-  }, [])
 
   const googleProvider = useMemo(() => {
     if (!settings.geminiApiKey) return null
@@ -168,7 +142,6 @@ export function useStreamChat() {
         imageStoreRef.current.set(content.slice(0, 80), images)
       }
 
-      // Build AI SDK user message (text or multimodal)
       const userParts: any[] = images?.length
         ? [
             { type: 'text' as const, text: content },
@@ -181,7 +154,6 @@ export function useStreamChat() {
 
       const aiMessages = [{ role: 'user' as const, content: userParts }]
 
-      // Google-specific provider options
       const googleOptions: Record<string, any> = {
         safetySettings: RELAXED_SAFETY,
       }
@@ -225,7 +197,6 @@ export function useStreamChat() {
           )
         }
 
-        // Extract grounding metadata and inject inline <sup> references
         let finalText = accumulated
         try {
           const [sources, meta] = await Promise.all([
@@ -237,12 +208,10 @@ export function useStreamChat() {
           const supports: any[] | undefined =
             googleMeta?.groundingMetadata?.groundingSupports
 
-          // Inject <sup> tags at segment boundaries using groundingSupports
           if (supports?.length) {
             finalText = injectGroundingSups(finalText, supports)
           }
 
-          // Store URL sources (keyed by finalText which may now contain sups)
           if (sources?.length) {
             const urlSources = sources.filter(
               (s): s is Extract<typeof s, { sourceType: 'url' }> =>
@@ -291,17 +260,57 @@ export function useStreamChat() {
   )
 
   // ================================================================
+  // Conversation switch: load messages from ConversationStore
+  // ================================================================
+  const prevConvIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (activeConversationId === prevConvIdRef.current) return
+    prevConvIdRef.current = activeConversationId
+
+    const conv = useConversationStore.getState().conversations[activeConversationId ?? '']
+    const stored = conv?.messages ?? []
+    const restored = stored.map((m) => ({
+      id: m.id,
+      message: m.message as XModelMessage,
+      status: (m.status || 'local') as MessageStatus,
+    })) as MessageInfo<XModelMessage>[]
+
+    setOpenaiMessages(restored)
+    setGeminiMessages(restored)
+  }, [activeConversationId, setOpenaiMessages])
+
+  // ================================================================
   // Unified interface
   // ================================================================
   const messages = isGemini ? geminiMessages : openaiMessages
   const loading = isGemini ? geminiLoading : openaiLoading
 
-  // Persistence (debounced, saves active provider's messages)
+  // Persistence: debounced save to ConversationStore
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
+    const convId = activeConversationId
+    if (!convId) return
+
     clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => saveMessages(messages), 500)
-  }, [messages])
+    saveTimerRef.current = setTimeout(() => {
+      const toSave = messages
+        .filter((m) => m.status === 'success' || m.status === 'local' || m.status === 'error')
+        .map((m) => ({
+          id: m.id,
+          message: {
+            role: m.message.role,
+            content: typeof m.message.content === 'string'
+              ? m.message.content
+              : (m.message.content as any)?.text ?? '',
+          },
+          status: m.status as string,
+        }))
+      useConversationStore.getState().saveMessages(convId, toSave)
+    }, 500)
+
+    return () => clearTimeout(saveTimerRef.current)
+  }, [messages, activeConversationId])
 
   const sendMessage = useCallback(
     (content: string, systemPrompt?: string, images?: string[]) => {
@@ -310,7 +319,6 @@ export function useStreamChat() {
         return
       }
 
-      // OpenAI path
       const hasImages = images && images.length > 0
       let userContent: any = content
       if (hasImages) {
@@ -346,8 +354,10 @@ export function useStreamChat() {
     } else {
       setOpenaiMessages([])
     }
-    chrome.storage.local.remove(STORAGE_KEY).catch(() => {})
-  }, [isGemini, setOpenaiMessages])
+    if (activeConversationId) {
+      useConversationStore.getState().clearConversation(activeConversationId)
+    }
+  }, [isGemini, setOpenaiMessages, activeConversationId])
 
   return {
     messages,
